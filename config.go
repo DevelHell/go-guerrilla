@@ -32,6 +32,7 @@ type ServerConfig struct {
 	TLSAlwaysOn     bool     `json:"tls_always_on,omitempty"`
 	MaxClients      int      `json:"max_clients"`
 	LogFile         string   `json:"log_file,omitempty"`
+	AuthRequired    bool     `json:"auth_required,omitempty"`
 	AuthTypes       []string `json:"auth_type,omitempty"`
 
 	_privateKeyFile_mtime int

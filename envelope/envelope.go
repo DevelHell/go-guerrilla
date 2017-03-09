@@ -45,7 +45,8 @@ type Envelope struct {
 	// TLS is true if the email was received using a TLS connection
 	TLS bool
 	// Header stores the results from ParseHeaders()
-	Header textproto.MIMEHeader
+	Header          textproto.MIMEHeader
+	AuthorizedLogin string
 }
 
 // ParseHeaders parses the headers into Header field of the Envelope struct.

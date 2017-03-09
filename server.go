@@ -60,11 +60,10 @@ type server struct {
 	state           int
 	mainlog         log.Logger
 	log             log.Logger
-	authType        []string
 	// If log changed after a config reload, newLogStore stores the value here until it's safe to change it
 	logStore      atomic.Value
 	mainlogStore  atomic.Value
-	authenticator authenticators.Authenticator
+	authenticator authenticators.Authenticator ``
 }
 
 type allowedHosts struct {
@@ -307,7 +306,7 @@ func (server *server) handleClient(client *client) {
 	// The last line doesn't need \r\n since string will be printed as a new line.
 	// Also, Last line has no dash -
 	help := "250 HELP"
-	advertiseAuthType := server.authenticator.GetAdvertiseAuthentication(server.authType)
+	advertiseAuthType := server.authenticator.GetAdvertiseAuthentication(sc.AuthTypes)
 
 	if sc.TLSAlwaysOn {
 		tlsConfig, ok := server.tlsConfigStore.Load().(*tls.Config)
@@ -484,6 +483,7 @@ func (server *server) handleClient(client *client) {
 			}
 			client.password = password
 			if server.authenticator.VerifyLOGIN(client.login, client.password) {
+				client.AuthorizedLogin = server.authenticator.DecodeLogin()
 				client.sendResponse("235 Authentication succeeded")
 			} else {
 				client.sendResponse("535 5.7.0 Invalid login or password")
@@ -491,6 +491,11 @@ func (server *server) handleClient(client *client) {
 			client.state = ClientCmd
 
 		case ClientData:
+			if sc.AuthRequired && !server.authenticator.IsVerified() {
+				client.state = ClientCmd
+				client.sendResponse("5.5.1 Authentication Required")
+				break
+			}
 
 			// intentionally placed the limit 1MB above so that reading does not return with an error
 			// if the client goes a little over. Anything above will err
