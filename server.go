@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/flashmob/go-guerrilla/authenticators"
 	"github.com/flashmob/go-guerrilla/backends"
 	"github.com/flashmob/go-guerrilla/envelope"
 	"github.com/flashmob/go-guerrilla/log"
@@ -59,9 +60,11 @@ type server struct {
 	state           int
 	mainlog         log.Logger
 	log             log.Logger
+	authType        []string
 	// If log changed after a config reload, newLogStore stores the value here until it's safe to change it
-	logStore     atomic.Value
-	mainlogStore atomic.Value
+	logStore      atomic.Value
+	mainlogStore  atomic.Value
+	authenticator authenticators.Authenticator
 }
 
 type allowedHosts struct {
@@ -70,7 +73,7 @@ type allowedHosts struct {
 }
 
 // Creates and returns a new ready-to-run Server from a configuration
-func newServer(sc *ServerConfig, b backends.Backend, l log.Logger) (*server, error) {
+func newServer(sc *ServerConfig, b backends.Backend, a authenticators.Authenticator, l log.Logger) (*server, error) {
 	server := &server{
 		backend:         b,
 		clientPool:      NewPool(sc.MaxClients),
@@ -78,6 +81,7 @@ func newServer(sc *ServerConfig, b backends.Backend, l log.Logger) (*server, err
 		listenInterface: sc.ListenInterface,
 		state:           ServerStateNew,
 		mainlog:         l,
+		authenticator:   a,
 	}
 	var logOpenError error
 	if sc.LogFile == "" {
@@ -303,7 +307,7 @@ func (server *server) handleClient(client *client) {
 	// The last line doesn't need \r\n since string will be printed as a new line.
 	// Also, Last line has no dash -
 	help := "250 HELP"
-	advertiseLogin := "250-AUTH LOGIN\r\n"
+	advertiseAuthType := server.authenticator.GetAdvertiseAuthentication(server.authType)
 
 	if sc.TLSAlwaysOn {
 		tlsConfig, ok := server.tlsConfigStore.Load().(*tls.Config)
@@ -370,13 +374,17 @@ func (server *server) handleClient(client *client) {
 					messageSize,
 					pipelining,
 					advertiseTLS,
-					advertiseLogin,
+					advertiseAuthType,
 					advertiseEnhancedStatusCodes,
 					help)
 
 			case strings.Index(cmd, "AUTH LOGIN") == 0:
-				client.state = ClientLogin
-				client.sendResponse("334 VXNlcm5hbWU6")
+				if !sc.IsAuthTypeAllowed("LOGIN") {
+					client.sendResponse("500 5.5.1 Invalid command")
+				} else {
+					client.state = ClientLogin
+					client.sendResponse("334 VXNlcm5hbWU6")
+				}
 			case strings.Index(cmd, "HELP") == 0:
 				quote := response.GetQuote()
 				client.sendResponse("214-OK\r\n" + quote)
@@ -475,10 +483,7 @@ func (server *server) handleClient(client *client) {
 				fmt.Errorf("Error reading password")
 			}
 			client.password = password
-			server.backend.authenticate()
-			server.auth.verify(login, password)
-
-			if client.login == "jozef" && client.password == "heslo" {
+			if server.authenticator.VerifyLOGIN(client.login, client.password) {
 				client.sendResponse("235 Authentication succeeded")
 			} else {
 				client.sendResponse("535 5.7.0 Invalid login or password")

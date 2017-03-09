@@ -3,6 +3,7 @@ package guerrilla
 import (
 	"errors"
 	evbus "github.com/asaskevich/EventBus"
+	"github.com/flashmob/go-guerrilla/authenticators"
 	"github.com/flashmob/go-guerrilla/backends"
 	"github.com/flashmob/go-guerrilla/log"
 	"sync"
@@ -43,9 +44,10 @@ type Guerrilla interface {
 }
 
 type guerrilla struct {
-	Config  AppConfig
-	servers map[string]*server
-	backend backends.Backend
+	Config        AppConfig
+	servers       map[string]*server
+	backend       backends.Backend
+	authenticator authenticators.Authenticator
 	// guard controls access to g.servers
 	guard sync.Mutex
 	state int8
@@ -72,12 +74,13 @@ func (ls *logStore) storeMainlog(log log.Logger) {
 }
 
 // Returns a new instance of Guerrilla with the given config, not yet running.
-func New(ac *AppConfig, b backends.Backend, l log.Logger) (Guerrilla, error) {
+func New(ac *AppConfig, b backends.Backend, a authenticators.Authenticator, l log.Logger) (Guerrilla, error) {
 	g := &guerrilla{
-		Config:  *ac, // take a local copy
-		servers: make(map[string]*server, len(ac.Servers)),
-		backend: b,
-		bus:     evbus.New(),
+		Config:        *ac, // take a local copy
+		servers:       make(map[string]*server, len(ac.Servers)),
+		backend:       b,
+		authenticator: a,
+		bus:           evbus.New(),
 	}
 	g.storeMainlog(l)
 
@@ -107,7 +110,7 @@ func (g *guerrilla) makeServers() error {
 			errs = append(errs, errs...)
 			continue
 		} else {
-			server, err := newServer(&sc, g.backend, g.mainlog())
+			server, err := newServer(&sc, g.backend, g.authenticator, g.mainlog())
 			if err != nil {
 				g.mainlog().WithError(err).Errorf("Failed to create server [%s]", sc.ListenInterface)
 				errs = append(errs, err)

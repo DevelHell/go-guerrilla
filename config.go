@@ -21,21 +21,29 @@ type AppConfig struct {
 
 // ServerConfig specifies config options for a single server
 type ServerConfig struct {
-	IsEnabled       bool   `json:"is_enabled"`
-	Hostname        string `json:"host_name"`
-	MaxSize         int64  `json:"max_size"`
-	PrivateKeyFile  string `json:"private_key_file"`
-	PublicKeyFile   string `json:"public_key_file"`
-	Timeout         int    `json:"timeout"`
-	ListenInterface string `json:"listen_interface"`
-	StartTLSOn      bool   `json:"start_tls_on,omitempty"`
-	TLSAlwaysOn     bool   `json:"tls_always_on,omitempty"`
-	MaxClients      int    `json:"max_clients"`
-	LogFile         string `json:"log_file,omitempty"`
+	IsEnabled       bool     `json:"is_enabled"`
+	Hostname        string   `json:"host_name"`
+	MaxSize         int64    `json:"max_size"`
+	PrivateKeyFile  string   `json:"private_key_file"`
+	PublicKeyFile   string   `json:"public_key_file"`
+	Timeout         int      `json:"timeout"`
+	ListenInterface string   `json:"listen_interface"`
+	StartTLSOn      bool     `json:"start_tls_on,omitempty"`
+	TLSAlwaysOn     bool     `json:"tls_always_on,omitempty"`
+	MaxClients      int      `json:"max_clients"`
+	LogFile         string   `json:"log_file,omitempty"`
+	AuthTypes       []string `json:"auth_type,omitempty"`
 
 	_privateKeyFile_mtime int
 	_publicKeyFile_mtime  int
 }
+
+type AuthType string
+
+const (
+	AuthTypeLOGIN AuthType = "LOGIN"
+	AuthTypePLAIN AuthType = "PLAIN"
+)
 
 type Event int
 
@@ -289,6 +297,16 @@ func (sc *ServerConfig) Validate() Errors {
 
 	}
 	return errs
+}
+
+func (sc *ServerConfig) IsAuthTypeAllowed(authType string) bool {
+	for _, at := range sc.AuthTypes {
+		if at == authType {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Returns a diff between struct a & struct b.
