@@ -303,6 +303,7 @@ func (server *server) handleClient(client *client) {
 	// The last line doesn't need \r\n since string will be printed as a new line.
 	// Also, Last line has no dash -
 	help := "250 HELP"
+	advertiseLogin := "250-AUTH LOGIN\r\n"
 
 	if sc.TLSAlwaysOn {
 		tlsConfig, ok := server.tlsConfigStore.Load().(*tls.Config)
@@ -369,9 +370,13 @@ func (server *server) handleClient(client *client) {
 					messageSize,
 					pipelining,
 					advertiseTLS,
+					advertiseLogin,
 					advertiseEnhancedStatusCodes,
 					help)
 
+			case strings.Index(cmd, "AUTH LOGIN") == 0:
+				client.state = ClientLogin
+				client.sendResponse("334 VXNlcm5hbWU6")
 			case strings.Index(cmd, "HELP") == 0:
 				quote := response.GetQuote()
 				client.sendResponse("214-OK\r\n" + quote)
@@ -453,6 +458,32 @@ func (server *server) handleClient(client *client) {
 					client.sendResponse(response.Canned.FailUnrecognizedCmd)
 				}
 			}
+
+		case ClientLogin:
+			login, err := server.readCommand(client, sc.MaxSize)
+			if err != nil {
+				fmt.Errorf("Error reading login")
+			}
+
+			client.login = login
+			client.state = ClientPassword
+			client.sendResponse("334 UGFzc3dvcmQ6")
+
+		case ClientPassword:
+			password, err := server.readCommand(client, sc.MaxSize)
+			if err != nil {
+				fmt.Errorf("Error reading password")
+			}
+			client.password = password
+			server.backend.authenticate()
+			server.auth.verify(login, password)
+
+			if client.login == "jozef" && client.password == "heslo" {
+				client.sendResponse("235 Authentication succeeded")
+			} else {
+				client.sendResponse("535 5.7.0 Invalid login or password")
+			}
+			client.state = ClientCmd
 
 		case ClientData:
 
