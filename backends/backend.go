@@ -2,8 +2,8 @@ package backends
 
 import (
 	"fmt"
-	"github.com/flashmob/go-guerrilla/log"
-	"github.com/flashmob/go-guerrilla/mail"
+	"github.com/DevelHell/go-guerrilla/log"
+	"github.com/DevelHell/go-guerrilla/mail"
 	"reflect"
 	"strconv"
 	"strings"

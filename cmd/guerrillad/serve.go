@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
-	"github.com/flashmob/go-guerrilla"
-	"github.com/flashmob/go-guerrilla/log"
+	"github.com/DevelHell/go-guerrilla"
+	"github.com/DevelHell/go-guerrilla/log"
 	"github.com/spf13/cobra"
 	"os"
 	"os/exec"

@@ -3,9 +3,9 @@ package guerrilla
 import (
 	"errors"
 	"fmt"
-	"github.com/flashmob/go-guerrilla/authenticators"
-	"github.com/flashmob/go-guerrilla/backends"
-	"github.com/flashmob/go-guerrilla/log"
+	"github.com/DevelHell/go-guerrilla/authenticators"
+	"github.com/DevelHell/go-guerrilla/backends"
+	"github.com/DevelHell/go-guerrilla/log"
 	"os"
 	"sync"
 	"sync/atomic"
