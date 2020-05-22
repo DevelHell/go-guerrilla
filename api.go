@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/flashmob/go-guerrilla/authenticators"
 	"github.com/flashmob/go-guerrilla/backends"
 	"github.com/flashmob/go-guerrilla/log"
 	"io/ioutil"
@@ -13,9 +14,10 @@ import (
 // Daemon provides a convenient API when using go-guerrilla as a package in your Go project.
 // Is's facade for Guerrilla, AppConfig, backends.Backend and log.Logger
 type Daemon struct {
-	Config  *AppConfig
-	Logger  log.Logger
-	Backend backends.Backend
+	Config        *AppConfig
+	Logger        log.Logger
+	Backend       backends.Backend
+	Authenticator authenticators.AuthenticatorCreator
 
 	// Guerrilla will be managed through the API
 	g Guerrilla
@@ -35,6 +37,10 @@ const defaultInterface = "127.0.0.1:2525"
 // name is the identifier to be used in the config. See backends docs for more info.
 func (d *Daemon) AddProcessor(name string, pc backends.ProcessorConstructor) {
 	backends.Svc.AddProcessor(name, pc)
+}
+
+func (d *Daemon) AddAuthenticator(authenticator authenticators.AuthenticatorCreator) {
+	d.Authenticator = authenticator
 }
 
 // Starts the daemon, initializing d.Config, d.Logger and d.Backend with defaults
@@ -59,7 +65,7 @@ func (d *Daemon) Start() (err error) {
 				return err
 			}
 		}
-		d.g, err = New(d.Config, d.Backend, d.Logger)
+		d.g, err = New(d.Config, d.Backend, d.Authenticator, d.Logger)
 		if err != nil {
 			return err
 		}

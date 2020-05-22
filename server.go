@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/flashmob/go-guerrilla/authenticators"
 	"github.com/flashmob/go-guerrilla/backends"
 	"github.com/flashmob/go-guerrilla/log"
 	"github.com/flashmob/go-guerrilla/mail"
@@ -18,7 +19,7 @@ import (
 )
 
 const (
-	CommandVerbMaxLength = 16
+	CommandVerbMaxLength = 160
 	CommandLineMaxLength = 1024
 	// Number of allowed unrecognized commands before we terminate the connection
 	MaxUnrecognizedCommands = 5
@@ -56,10 +57,11 @@ type server struct {
 	hosts           allowedHosts // stores map[string]bool for faster lookup
 	state           int
 	// If log changed after a config reload, newLogStore stores the value here until it's safe to change it
-	logStore     atomic.Value
-	mainlogStore atomic.Value
-	backendStore atomic.Value
-	envelopePool *mail.Pool
+	logStore      atomic.Value
+	mainlogStore  atomic.Value
+	backendStore  atomic.Value
+	envelopePool  *mail.Pool
+	authenticator authenticators.Authenticator
 }
 
 type allowedHosts struct {
@@ -68,13 +70,14 @@ type allowedHosts struct {
 }
 
 // Creates and returns a new ready-to-run Server from a configuration
-func newServer(sc *ServerConfig, b backends.Backend, l log.Logger) (*server, error) {
+func newServer(sc *ServerConfig, b backends.Backend, a authenticators.Authenticator, l log.Logger) (*server, error) {
 	server := &server{
 		clientPool:      NewPool(sc.MaxClients),
 		closedListener:  make(chan (bool), 1),
 		listenInterface: sc.ListenInterface,
 		state:           ServerStateNew,
 		envelopePool:    mail.NewPool(sc.MaxClients),
+		authenticator:   a,
 	}
 	server.logStore.Store(l)
 	server.backendStore.Store(b)
@@ -283,6 +286,7 @@ func (server *server) isShuttingDown() bool {
 func (server *server) handleClient(client *client) {
 	defer client.closeConn()
 	sc := server.configStore.Load().(ServerConfig)
+	client.authStore = authenticators.AuthStore{}
 	server.log().Infof("Handle client [%s], id: %d", client.RemoteIP, client.ID)
 
 	// Initial greeting
@@ -302,6 +306,7 @@ func (server *server) handleClient(client *client) {
 	// The last line doesn't need \r\n since string will be printed as a new line.
 	// Also, Last line has no dash -
 	help := "250 HELP"
+	advertiseAuthType := server.authenticator.GetAdvertiseAuthentication(sc.AuthTypes)
 
 	if sc.TLSAlwaysOn {
 		tlsConfig, ok := server.tlsConfigStore.Load().(*tls.Config)
@@ -368,8 +373,36 @@ func (server *server) handleClient(client *client) {
 					messageSize,
 					pipelining,
 					advertiseTLS,
+					advertiseAuthType,
 					advertiseEnhancedStatusCodes,
 					help)
+				// .NET library fix - note the trailing space
+			case strings.Index(cmd, "AUTH LOGIN ") == 0:
+				client.login = input[len("AUTH LOGIN "):]
+				client.state = ClientPassword
+				client.sendResponse("334 UGFzc3dvcmQ6")
+			case strings.Index(cmd, "AUTH LOGIN") == 0:
+				if !sc.IsAuthTypeAllowed("LOGIN") {
+					client.sendResponse("500 5.5.1 Invalid command")
+				} else {
+					client.state = ClientLogin
+					client.authType = AuthLOGIN
+					client.sendResponse("334 VXNlcm5hbWU6")
+				}
+
+			case strings.Index(cmd, "AUTH CRAM-MD5") == 0:
+				if !sc.IsAuthTypeAllowed("CRAM-MD5") {
+					client.sendResponse("500 5.5.1 Invalid command")
+				} else {
+					client.authType = AuthCRAMMD5
+					client.state = ClientLogin
+					challenge, err := server.authenticator.GenerateCRAMMD5Challenge()
+					if err != nil {
+						fmt.Errorf("Error generating crammd5 challenge")
+					}
+					client.authStore.CRAMMD5challenge = challenge
+					client.sendResponse("334 ", challenge)
+				}
 
 			case strings.Index(cmd, "HELP") == 0:
 				quote := response.GetQuote()
@@ -416,6 +449,10 @@ func (server *server) handleClient(client *client) {
 				client.sendResponse(response.Canned.SuccessMailCmd)
 
 			case strings.Index(cmd, "RCPT TO:") == 0:
+				if sc.AuthRequired && !client.authStore.IsAuthenticated {
+					client.sendResponse("554 5.7.1 Client host rejected: Access denied")
+					break
+				}
 				if len(client.RcptTo) > RFC2821LimitRecipients {
 					client.sendResponse(response.Canned.ErrorTooManyRecipients)
 					break
@@ -453,6 +490,10 @@ func (server *server) handleClient(client *client) {
 				client.kill()
 
 			case strings.Index(cmd, "DATA") == 0:
+				if sc.AuthRequired && !client.authStore.IsAuthenticated {
+					client.sendResponse("554 5.7.1 Client host rejected: Access denied")
+					break
+				}
 				if client.MailFrom.IsEmpty() {
 					client.sendResponse(response.Canned.FailNoSenderDataCmd)
 					break
@@ -478,11 +519,58 @@ func (server *server) handleClient(client *client) {
 				}
 			}
 
+		case ClientLogin:
+			switch client.authType {
+			case AuthLOGIN:
+				login, err := server.readCommand(client, sc.MaxSize)
+				if err != nil {
+					fmt.Errorf("Error reading login")
+				}
+
+				client.login = login
+				client.state = ClientPassword
+				client.sendResponse("334 UGFzc3dvcmQ6")
+			case AuthCRAMMD5:
+				authString, err := server.readCommand(client, sc.MaxSize)
+				if err != nil {
+					fmt.Errorf("Error reading crammd5 auth string")
+				}
+				if server.authenticator.VerifyCRAMMD5(client.authStore.CRAMMD5challenge, authString) {
+					client.authStore.IsAuthenticated = true
+					client.AuthorizedLogin = server.authenticator.ExtractLoginFromAuthString(authString)
+					client.sendResponse("235 Authentication succeeded")
+				} else {
+					client.sendResponse("535 5.7.8 Error: authentication failed:")
+				}
+				client.state = ClientCmd
+			}
+
+		case ClientPassword:
+			password, err := server.readCommand(client, sc.MaxSize)
+			if err != nil {
+				fmt.Errorf("Error reading password")
+			}
+			client.password = password
+			if server.authenticator.VerifyLOGIN(client.login, client.password) {
+				client.AuthorizedLogin, err = server.authenticator.DecodeLogin(client.login)
+				if err != nil {
+					fmt.Print(err)
+					client.sendResponse("535 5.7.0 Invalid login or password")
+				} else {
+					client.authStore.IsAuthenticated = true
+					client.sendResponse("235 Authentication succeeded")
+				}
+			} else {
+				client.sendResponse("535 5.7.0 Invalid login or password")
+			}
+			client.state = ClientCmd
+
 		case ClientData:
 
 			// intentionally placed the limit 1MB above so that reading does not return with an error
 			// if the client goes a little over. Anything above will err
-			client.bufin.setLimit(int64(sc.MaxSize) + 1024000) // This a hard limit.
+			maxMailSize := int64(server.authenticator.GetMailSize(client.AuthorizedLogin, sc.MaxSize))
+			client.bufin.setLimit(maxMailSize + 1024000) // This a hard limit.
 
 			n, err := client.Data.ReadFrom(client.smtpReader.DotReader())
 			if n > sc.MaxSize {
@@ -503,6 +591,8 @@ func (server *server) handleClient(client *client) {
 				client.resetTransaction()
 				break
 			}
+
+			client.Envelope.Values["listen_interface"] = server.listenInterface
 
 			res := server.backend().Process(client.Envelope)
 			if res.Code() < 300 {

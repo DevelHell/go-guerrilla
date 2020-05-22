@@ -63,7 +63,9 @@ type ServerConfig struct {
 	LogFile string `json:"log_file,omitempty"`
 	// XClientOn when using a proxy such as Nginx, XCLIENT command is used to pass the
 	// original client's IP address & client's HELO
-	XClientOn bool `json:"xclient_on,omitempty"`
+	XClientOn    bool     `json:"xclient_on,omitempty"`
+	AuthRequired bool     `json:"auth_required,omitempty"`
+	AuthTypes    []string `json:"auth_types,omitempty"`
 
 	// The following used to watch certificate changes so that the TLS can be reloaded
 	_privateKeyFile_mtime int
@@ -378,6 +380,16 @@ func (sc *ServerConfig) Validate() error {
 	}
 
 	return nil
+}
+
+func (sc *ServerConfig) IsAuthTypeAllowed(authType string) bool {
+	for _, at := range sc.AuthTypes {
+		if at == authType {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Returns a diff between struct a & struct b.
